@@ -1,37 +1,42 @@
 package zurku.gravestones;
 
 import com.hypixel.hytale.codec.builder.BuilderCodec;
-import com.hypixel.hytale.component.AddReason;
 import com.hypixel.hytale.component.CommandBuffer;
-import com.hypixel.hytale.component.Holder;
 import com.hypixel.hytale.component.Ref;
 import com.hypixel.hytale.component.Store;
-import com.hypixel.hytale.math.vector.Vector3d;
-import com.hypixel.hytale.math.vector.Vector3f;
-import com.hypixel.hytale.math.vector.Vector3i;
+import com.hypixel.hytale.math.util.ChunkUtil;
 import com.hypixel.hytale.protocol.InteractionType;
+import com.hypixel.hytale.protocol.packets.interface_.Page;
+import com.hypixel.hytale.server.core.asset.type.blocktype.config.BlockType;
 import com.hypixel.hytale.server.core.entity.InteractionContext;
 import com.hypixel.hytale.server.core.entity.UUIDComponent;
 import com.hypixel.hytale.server.core.entity.entities.Player;
+import com.hypixel.hytale.server.core.entity.entities.player.windows.ContainerBlockWindow;
 import com.hypixel.hytale.server.core.inventory.ItemStack;
-import com.hypixel.hytale.server.core.inventory.container.CombinedItemContainer;
-import com.hypixel.hytale.server.core.inventory.container.ItemContainer;
-import com.hypixel.hytale.server.core.modules.entity.component.HeadRotation;
-import com.hypixel.hytale.server.core.modules.entity.item.ItemComponent;
+import com.hypixel.hytale.server.core.modules.block.components.ItemContainerBlock;
 import com.hypixel.hytale.server.core.modules.interaction.interaction.CooldownHandler;
 import com.hypixel.hytale.server.core.modules.interaction.interaction.config.RootInteraction;
 import com.hypixel.hytale.server.core.modules.interaction.interaction.config.client.SimpleBlockInteraction;
+import com.hypixel.hytale.server.core.universe.PlayerRef;
 import com.hypixel.hytale.server.core.universe.world.World;
-import com.hypixel.hytale.server.core.universe.world.meta.BlockState;
-import com.hypixel.hytale.server.core.universe.world.meta.state.ItemContainerState;
+import com.hypixel.hytale.server.core.universe.world.chunk.BlockChunk;
+import com.hypixel.hytale.server.core.universe.world.chunk.BlockComponentChunk;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 import com.hypixel.hytale.server.core.HytaleServer;
 import com.hypixel.hytale.event.IEventDispatcher;
+import org.joml.Vector3i;
 import zurku.gravestones.event.GravestoneCollectedEvent;
-import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
-@SuppressWarnings({"rawtypes", "unchecked", "removal"})
+/**
+ * Opens a chest-style inventory window for the gravestone's contents instead of instantly
+ * transferring everything to the player and destroying the block (the old, pre-Update-5
+ * behaviour). The block only despawns once the player has actually emptied it and closed
+ * the window - mirrors the engine's own built-in OpenContainerInteraction (used by chests),
+ * with our owner/access checks layered in front of it.
+ */
+@SuppressWarnings({"rawtypes", "unchecked"})
 public class CollectGravestoneInteraction extends SimpleBlockInteraction {
 
     private static GravestoneManager manager;
@@ -48,6 +53,11 @@ public class CollectGravestoneInteraction extends SimpleBlockInteraction {
         INSTANCE.getId(),
         new String[] { INSTANCE.getId() }
     );
+
+    // Same hardcoded state ids the built-in OpenContainerInteraction uses; our block JSON's
+    // State.Definitions already wires these to the chest open/close sounds.
+    private static final String OPEN_WINDOW = "OpenWindow";
+    private static final String CLOSE_WINDOW = "CloseWindow";
 
     public static void setManager(GravestoneManager mgr) {
         manager = mgr;
@@ -75,6 +85,9 @@ public class CollectGravestoneInteraction extends SimpleBlockInteraction {
         Store store = ref.getStore();
         Player player = buffer.getComponent(ref, Player.getComponentType());
         if (player == null) return;
+
+        PlayerRef playerRef = buffer.getComponent(ref, PlayerRef.getComponentType());
+        if (playerRef == null) return;
 
         if (manager != null) {
             manager.registerWorld(world);
@@ -104,55 +117,83 @@ public class CollectGravestoneInteraction extends SimpleBlockInteraction {
             }
         }
 
-        BlockState state = BlockStateUtil.getBlockState(world, pos.x, pos.y, pos.z);
-        if (!(state instanceof ItemContainerState)) return;
+        // Resolve the block entity + its container the same way the engine's own
+        // OpenContainerInteraction (used by chests) does.
+        final var chunkStore = world.getChunkStore();
+        final long chunkIndex = ChunkUtil.indexChunkFromBlock(pos.x, pos.z);
+        final var chunkRef = chunkStore.getChunkReference(chunkIndex);
+        if (chunkRef == null || !chunkRef.isValid()) return;
 
-        ItemContainerState containerState = (ItemContainerState) state;
-        if (!containerState.isAllowViewing() || !containerState.canOpen(ref, buffer)) return;
+        final var chunkComponentStore = chunkStore.getStore();
+        final var blockComponentChunk = chunkComponentStore.getComponent(chunkRef, BlockComponentChunk.getComponentType());
+        if (blockComponentChunk == null) return;
 
-        CombinedItemContainer playerInv = player.getInventory().getCombinedEverything();
-        ItemContainer graveInv = containerState.getItemContainer();
+        final int columnBlockIndex = ChunkUtil.indexBlockInColumn(pos.x, pos.y, pos.z);
+        final var blockRef = blockComponentChunk.getEntityReference(columnBlockIndex);
+        if (blockRef == null) return;
 
-        for (short i = 0; i < graveInv.getCapacity(); i++) {
-            ItemStack item = graveInv.getItemStack(i);
-            if (item != null && !item.isEmpty()) {
-                ItemStack remainder = playerInv.addItemStack(item).getRemainder();
-                graveInv.setItemStackForSlot(i, remainder);
+        final ItemContainerBlock containerBlock = chunkComponentStore.getComponent(blockRef, ItemContainerBlock.getComponentType());
+        if (containerBlock == null) return;
+
+        final var blockChunkComponent = chunkComponentStore.getComponent(chunkRef, BlockChunk.getComponentType());
+        if (blockChunkComponent == null) return;
+
+        final int blockId = blockChunkComponent.getBlock(pos.x, pos.y, pos.z);
+        final BlockType blockType = BlockType.getAssetMap().getAsset(blockId);
+        if (blockType == null) return;
+
+        final var section = blockChunkComponent.getSectionAtBlockY(pos.y);
+        final int rotationIndex = section.getRotationIndex(pos.x, pos.y, pos.z);
+
+        final var window = new ContainerBlockWindow(pos.x, pos.y, pos.z, rotationIndex, blockType, containerBlock.getItemContainer());
+        final var windows = containerBlock.getWindows();
+
+        final var uuidComponent = buffer.getComponent(ref, UUIDComponent.getComponentType());
+        if (uuidComponent == null) return;
+        final var uuid = uuidComponent.getUuid();
+
+        if (windows.putIfAbsent(uuid, window) == null) {
+            if (player.getPageManager().setPageWithWindows(ref, store, Page.Bench, true, window)) {
+                window.registerCloseEvent(unused -> onWindowClose(world, ref, uuid, pos, windows, containerBlock, buffer));
+
+                if (windows.size() == 1) {
+                    world.setBlockInteractionState(pos, blockType, OPEN_WINDOW);
+                }
+            } else {
+                windows.remove(uuid, window);
             }
         }
+    }
 
-        if (!graveInv.isEmpty()) {
-            world.execute(() -> {
-                HeadRotation rot = (HeadRotation) store.getComponent(ref, HeadRotation.getComponentType());
-                Vector3f facing = rot != null ? rot.getRotation() : new Vector3f();
-                List<ItemStack> remaining = graveInv.dropAllItemStacks();
-                Vector3d dropPos = pos.clone().add(0, 1, 0).toVector3d();
+    /**
+     * Once the window is closed: if the player emptied the gravestone, clean up the
+     * bookkeeping and despawn the (now empty) block. Otherwise leave it in place so the
+     * player (or whoever else is allowed) can come back for the rest later.
+     */
+    private void onWindowClose(World world, Ref<EntityStore> ref, UUID uuid, Vector3i pos,
+                                Map<UUID, ContainerBlockWindow> windows, ItemContainerBlock containerBlock,
+                                CommandBuffer<EntityStore> buffer) {
+        windows.remove(uuid, containerBlock.getWindows().get(uuid));
 
-                Holder[] drops = ItemComponent.generateItemDrops(store, remaining, dropPos, facing);
-                for (Holder drop : drops) {
-                    world.getEntityStore().getStore().addEntity(drop, AddReason.SPAWN);
-                }
-            });
+        if (!containerBlock.getItemContainer().isEmpty()) {
+            // Still has items left - leave the gravestone standing.
+            return;
         }
 
-        // Fire collected event
+        // Fire collected event now that the grave is actually empty.
         try {
-            UUID collectorUuid = null;
             UUID ownerUuid = manager != null ? manager.getGravestoneOwner(pos.x, pos.y, pos.z) : null;
-            UUIDComponent collectorComp = (UUIDComponent) store.getComponent(ref, UUIDComponent.getComponentType());
-            if (collectorComp != null) collectorUuid = collectorComp.getUuid();
-            if (collectorUuid != null) {
-                final UUID cUuid = collectorUuid;
-                final UUID oUuid = ownerUuid;
-                IEventDispatcher<GravestoneCollectedEvent, GravestoneCollectedEvent> dispatcher =
-                    HytaleServer.get().getEventBus().dispatchFor(GravestoneCollectedEvent.class);
-                if (dispatcher.hasListener()) {
-                    dispatcher.dispatch(new GravestoneCollectedEvent(cUuid, oUuid, pos.x, pos.y, pos.z, world.getName()));
-                }
+            IEventDispatcher<GravestoneCollectedEvent, GravestoneCollectedEvent> dispatcher =
+                HytaleServer.get().getEventBus().dispatchFor(GravestoneCollectedEvent.class);
+            if (dispatcher.hasListener()) {
+                dispatcher.dispatch(new GravestoneCollectedEvent(uuid, ownerUuid, pos.x, pos.y, pos.z, world.getName()));
             }
         } catch (Exception ignored) {}
 
-        world.execute(() -> world.breakBlock(pos.x, pos.y, pos.z, 0));
+        if (manager != null) {
+            manager.removeGravestoneAtPosition(pos.x, pos.y, pos.z);
+            manager.breakGravestoneBlock(world, pos.x, pos.y, pos.z);
+        }
     }
 
     @Override

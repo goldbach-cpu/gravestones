@@ -10,10 +10,12 @@ import com.hypixel.hytale.server.core.asset.type.gameplay.DeathConfig;
 import com.hypixel.hytale.server.core.entity.entities.Player;
 import com.hypixel.hytale.server.core.inventory.ItemStack;
 import com.hypixel.hytale.server.core.inventory.Inventory;
+import com.hypixel.hytale.server.core.inventory.InventoryComponent;
 import com.hypixel.hytale.server.core.inventory.container.CombinedItemContainer;
 import com.hypixel.hytale.server.core.inventory.transaction.ItemStackSlotTransaction;
 import com.hypixel.hytale.server.core.modules.entity.damage.DeathComponent;
 import com.hypixel.hytale.server.core.modules.entity.damage.DeathSystems;
+import com.hypixel.hytale.server.core.modules.entitystats.EntityStatMap;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
 import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
@@ -56,8 +58,17 @@ public class DeathListenerSystem extends DeathSystems.OnDeathSystem {
             DeathConfig.ItemsLossMode mode = config.getItemsLossMode();
             if (mode == DeathConfig.ItemsLossMode.NONE) return;
 
-            Inventory inventory = player.getInventory();
-            CombinedItemContainer combined = inventory.getCombinedEverything();
+            // Inventory.getCombinedEverything() no longer exists (Update 5). The closest
+            // equivalent is asking InventoryComponent for a combined view across every slot
+            // component type (Storage/Armor/Hotbar/Utility/Backpack/Tool) that exists on the
+            // player entity - this replicates "everything the player is carrying".
+            CombinedItemContainer combined = InventoryComponent.getCombined(store, ref,
+                InventoryComponent.Storage.getComponentType(),
+                InventoryComponent.Armor.getComponentType(),
+                InventoryComponent.Hotbar.getComponentType(),
+                InventoryComponent.Utility.getComponentType(),
+                InventoryComponent.Backpack.getComponentType(),
+                InventoryComponent.Tool.getComponentType());
 
             double durLoss = config.getItemsDurabilityLossPercentage();
             if (durLoss > 0) {
@@ -79,10 +90,16 @@ public class DeathListenerSystem extends DeathSystems.OnDeathSystem {
                 }
 
                 if (armorBroken) {
-                    player.getStatModifiersManager().setRecalculate(true);
+                    // player.getStatModifiersManager() no longer exists (Update 5); stat
+                    // modifiers now live behind the EntityStatMap component.
+                    EntityStatMap statMap = store.getComponent(ref, EntityStatMap.getComponentType());
+                    if (statMap != null) {
+                        statMap.getStatModifiersManager().scheduleRecalculate();
+                    }
                 }
             }
 
+            Inventory inventory = player.getInventory();
             List<ItemStack> items = null;
             double lossPercent = config.getItemsAmountLossPercentage();
 

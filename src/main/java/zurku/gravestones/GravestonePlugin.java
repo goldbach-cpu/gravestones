@@ -44,10 +44,30 @@ public class GravestonePlugin extends JavaPlugin {
         instance = this;
         getLogger().atInfo().log("[Gravestones] Initializing...");
         cleanupOldVersionFiles();
-        
-        settings = new GravestoneSettings(getLogger());
+
+        // Using a plain relative "plugins/Gravestones" path depended on the server process's
+        // working directory, which isn't guaranteed to be the server root (e.g. depending on
+        // how start.bat launches the JVM) - it could silently write nowhere near the actual
+        // plugins folder. getFile() reliably returns the path to this plugin's own jar (that's
+        // how the engine tracks/unloads its classloader), so deriving the data folder from its
+        // parent directory always lands in the real plugins/ folder the server is using.
+        File dataFolder;
+        try {
+            var jarPath = getFile();
+            dataFolder = jarPath != null
+                ? jarPath.getParent().resolve("Gravestones").toFile()
+                : new File("plugins/Gravestones");
+        } catch (Exception e) {
+            dataFolder = new File("plugins/Gravestones");
+        }
+        if (!dataFolder.exists()) {
+            dataFolder.mkdirs();
+        }
+        getLogger().atInfo().log("[Gravestones] Using data folder: " + dataFolder.getAbsolutePath());
+
+        settings = new GravestoneSettings(getLogger(), dataFolder);
         settings.load();
-        gravestoneManager = new GravestoneManager(this, settings);
+        gravestoneManager = new GravestoneManager(this, settings, dataFolder);
         
         CollectGravestoneInteraction.setManager(gravestoneManager);
         BreakGravestoneInteraction.setManager(gravestoneManager);
@@ -219,9 +239,9 @@ public class GravestonePlugin extends JavaPlugin {
             getEventRegistry().registerGlobal(BreakBlockEvent.class, event -> {
                 String id = event.getBlockType().getId();
                 if (id != null && id.contains("Gravestone")) {
-                    int bx = event.getTargetBlock().getX();
-                    int by = event.getTargetBlock().getY();
-                    int bz = event.getTargetBlock().getZ();
+                    int bx = event.getTargetBlock().x;
+                    int by = event.getTargetBlock().y;
+                    int bz = event.getTargetBlock().z;
 
                     // Fire broken event before removing data
                     try {

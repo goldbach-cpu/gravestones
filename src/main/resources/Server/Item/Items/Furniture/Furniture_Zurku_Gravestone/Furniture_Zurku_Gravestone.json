@@ -51,14 +51,19 @@
       "Use": "Collect_Gravestone"
     },
     "State": {
-      "Id": "container",
-      "Capacity": 72,
       "Definitions": {
         "OpenWindow": {
           "InteractionSoundEventId": "SFX_Chest_Wooden_Open"
         },
         "CloseWindow": {
           "InteractionSoundEventId": "SFX_Chest_Wooden_Close"
+        }
+      }
+    },
+    "BlockEntity": {
+      "Components": {
+        "ItemContainerBlock": {
+          "Capacity": 72
         }
       }
     }

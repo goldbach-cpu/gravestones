@@ -6,17 +6,21 @@ import com.google.gson.reflect.TypeToken;
 import com.hypixel.hytale.component.Ref;
 import com.hypixel.hytale.component.Store;
 import com.hypixel.hytale.logger.HytaleLogger;
-import com.hypixel.hytale.math.vector.Vector3d;
+import com.hypixel.hytale.math.util.ChunkUtil;
+import com.hypixel.hytale.server.core.asset.type.blocktype.config.BlockType;
 import com.hypixel.hytale.server.core.entity.UUIDComponent;
 import com.hypixel.hytale.server.core.entity.entities.Player;
 import com.hypixel.hytale.server.core.inventory.ItemStack;
 import com.hypixel.hytale.server.core.inventory.container.SimpleItemContainer;
+import com.hypixel.hytale.server.core.modules.block.components.ItemContainerBlock;
 import com.hypixel.hytale.server.core.modules.entity.component.TransformComponent;
+import com.hypixel.hytale.server.core.universe.PlayerRef;
+import com.hypixel.hytale.server.core.universe.world.SetBlockSettings;
 import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.universe.world.chunk.WorldChunk;
-import com.hypixel.hytale.server.core.universe.world.meta.BlockState;
-import com.hypixel.hytale.server.core.universe.world.meta.state.ItemContainerState;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
+import com.hypixel.hytale.server.core.util.FillerBlockUtil;
+import org.joml.Vector3d;
 import com.hypixel.hytale.server.core.HytaleServer;
 import com.hypixel.hytale.event.IEventDispatcher;
 import zurku.gravestones.event.GravestonePreCreateEvent;
@@ -40,9 +44,9 @@ public class GravestoneManager {
 
     private static final int MAX_RETRIES = 10;
     private static final long RETRY_DELAY = 200L;
-    private static final String DATA_PATH = "plugins/Gravestones/gravestones.json";
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
+    private final File dataFile;
     private final GravestoneSettings settings;
     private final HytaleLogger logger;
     private final Map<UUID, List<GravestoneData>> playerGraves;
@@ -53,7 +57,8 @@ public class GravestoneManager {
     private World currentWorld;
     private GravestoneAccessChecker accessChecker;
 
-    public GravestoneManager(GravestonePlugin plugin, GravestoneSettings settings) {
+    public GravestoneManager(GravestonePlugin plugin, GravestoneSettings settings, File dataFolder) {
+        this.dataFile = new File(dataFolder, "gravestones.json");
         this.settings = settings;
         this.logger = plugin.getLogger();
         this.playerGraves = new ConcurrentHashMap<>();
@@ -87,6 +92,37 @@ public class GravestoneManager {
         }
     }
 
+    /**
+     * Breaks a gravestone block in-world without touching the data index directly.
+     * Mirrors the plugin's existing BreakBlockEvent listener flow, which detects the
+     * break and calls removeGravestoneAtPosition() for cleanup - kept as a separate
+     * step (rather than merging with destroyGravestone()) so interactions behave the
+     * same way they did before the Update 5 rewrite.
+     */
+    public void breakGravestoneBlock(World world, int x, int y, int z) {
+        breakBlockAt(world, x, y, z);
+    }
+
+    /**
+     * Breaks the block at the given position, resolving the chunk first since
+     * World no longer exposes breakBlock() directly (Update 5) - it now lives on
+     * WorldChunk (which implements BlockAccessor). Falls back to an async chunk
+     * load if the chunk isn't currently loaded.
+     */
+    private void breakBlockAt(World world, int x, int y, int z) {
+        WorldChunk chunk = BlockStateUtil.getLoadedChunk(world, x, z);
+        if (chunk != null) {
+            world.execute(() -> chunk.breakBlock(x, y, z));
+        } else {
+            long chunkKey = ChunkUtil.indexChunkFromBlock(x, z);
+            world.getChunkAsync(chunkKey).thenAccept(c -> {
+                if (c != null) {
+                    world.execute(() -> c.breakBlock(x, y, z));
+                }
+            });
+        }
+    }
+
     private void processPendingRemovals(World world) {
         if (pendingRemovals.isEmpty()) return;
         
@@ -94,7 +130,7 @@ public class GravestoneManager {
         for (GravestoneData data : pendingRemovals) {
             if (data.getWorldName().equals(world.getName())) {
                 int x = data.getX(), y = data.getY(), z = data.getZ();
-                world.execute(() -> world.breakBlock(x, y, z, 0));
+                breakBlockAt(world, x, y, z);
                 logger.atInfo().log("[Gravestones] Despawned queued gravestone at (" + x + ", " + y + ", " + z + ")");
                 processed.add(data);
             }
@@ -103,7 +139,7 @@ public class GravestoneManager {
     }
 
     private void load() {
-        File file = new File(DATA_PATH);
+        File file = dataFile;
         if (!file.exists()) return;
 
         try (FileReader reader = new FileReader(file)) {
@@ -123,7 +159,7 @@ public class GravestoneManager {
 
     private void save() {
         try {
-            File file = new File(DATA_PATH);
+            File file = dataFile;
             File parent = file.getParentFile();
             if (parent != null && !parent.exists()) {
                 parent.mkdirs();
@@ -144,7 +180,11 @@ public class GravestoneManager {
 
     public void setAccessChecker(GravestoneAccessChecker checker) {
         this.accessChecker = checker;
-        GravestoneBlockState.setAccessChecker(checker);
+        // Note: GravestoneBlockState was removed - its canOpen()/canDestroy() overrides were
+        // never actually wired to the placed block (the block's asset JSON uses the built-in
+        // "container" state, not a custom one), so this checker only ever needed to reach
+        // CollectGravestoneInteraction/BreakGravestoneInteraction via getAccessChecker() below,
+        // which is unaffected by the removal.
     }
 
     public GravestoneAccessChecker getAccessChecker() {
@@ -196,7 +236,7 @@ public class GravestoneManager {
         if (world == null) world = currentWorld;
         if (world != null && world.getName().equals(worldName)) {
             final World targetWorld = world;
-            targetWorld.execute(() -> targetWorld.breakBlock(x, y, z, 0));
+            breakBlockAt(targetWorld, x, y, z);
         }
         return true;
     }
@@ -235,7 +275,7 @@ public class GravestoneManager {
             
             if (world != null) {
                 final World targetWorld = world;
-                targetWorld.execute(() -> targetWorld.breakBlock(x, y, z, 0));
+                breakBlockAt(targetWorld, x, y, z);
                 logger.atInfo().log("[Gravestones] Despawned gravestone at (" + x + ", " + y + ", " + z + ") due to timer");
             } else {
                 pendingRemovals.add(data);
@@ -261,7 +301,7 @@ public class GravestoneManager {
             if (world != null && world.getName().equals(data.getWorldName())) {
                 int x = data.getX(), y = data.getY(), z = data.getZ();
                 final World targetWorld = world;
-                targetWorld.execute(() -> targetWorld.breakBlock(x, y, z, 0));
+                breakBlockAt(targetWorld, x, y, z);
                 logger.atInfo().log("[Gravestones] Despawned queued gravestone at (" + x + ", " + y + ", " + z + ")");
                 processed.add(data);
             }
@@ -290,7 +330,7 @@ public class GravestoneManager {
             GravestoneData oldest = list.remove(0);
             locationIndex.remove(oldest.getLocationKey());
             int x = oldest.getX(), y = oldest.getY(), z = oldest.getZ();
-            world.execute(() -> world.breakBlock(x, y, z, 0));
+            breakBlockAt(world, x, y, z);
             logger.atInfo().log("[Gravestones] Removed oldest gravestone at (" + x + ", " + y + ", " + z + ") due to limit");
             removed = true;
         }
@@ -330,14 +370,17 @@ public class GravestoneManager {
             if (uuidComp == null) return;
 
             UUID playerId = uuidComp.getUuid();
-            String playerName = player.getDisplayName();
+            // Player.getDisplayName() no longer exists (Update 5); the plain username now
+            // lives on the PlayerRef component instead.
+            PlayerRef playerRef = store.getComponent(ref, PlayerRef.getComponentType());
+            String playerName = playerRef != null ? playerRef.getUsername() : playerId.toString();
             TransformComponent transform = store.getComponent(ref, TransformComponent.getComponentType());
             if (transform == null) return;
 
             Vector3d pos = transform.getPosition();
-            int x = (int) pos.getX();
-            int y = (int) pos.getY();
-            int z = (int) pos.getZ();
+            int x = (int) pos.x;
+            int y = (int) pos.y;
+            int z = (int) pos.z;
 
             World world = player.getWorld();
             if (world == null) return;
@@ -400,7 +443,7 @@ public class GravestoneManager {
 
     private void placeGravestone(World world, int x, int y, int z, List<ItemStack> items) {
         try {
-            long chunkKey = ((long) (x >> 4) << 32) | ((long) (z >> 4) & 0xFFFFFFFFL);
+            long chunkKey = ChunkUtil.indexChunkFromBlock(x, z);
             WorldChunk chunk = world.getChunkIfLoaded(chunkKey);
 
             if (chunk == null) {
@@ -419,38 +462,51 @@ public class GravestoneManager {
 
     private void doPlacement(World world, WorldChunk chunk, int x, int y, int z, List<ItemStack> items) {
         try {
-            chunk.setBlock(x, y, z, 0);
-            world.setBlock(x, y, z, settings.getGravestoneBlockId());
+            // World.setBlock() / WorldChunk.setBlock(x,y,z,id) no longer exist (Update 5).
+            // WorldChunk.setBlock now always takes the resolved BlockType + numeric palette id + rotation/filler/settings.
+            chunk.setBlock(x, y, z, BlockType.EMPTY_ID, BlockType.EMPTY, 0, FillerBlockUtil.NO_FILLER, SetBlockSettings.NONE);
+
+            // GravestoneSettings.getGravestoneBlockId() returns the block's String asset key
+            // (e.g. "Zurku_Gravestones:Furniture_Zurku_Gravestone"), not a numeric id - BlockType
+            // itself is keyed by String now. The numeric id needed by WorldChunk.setBlock (the
+            // runtime palette index) comes from a separate lookup on the same asset map.
+            String graveKey = settings.getGravestoneBlockId();
+            var assetMap = BlockType.getAssetMap();
+            BlockType graveType = assetMap.getAsset(graveKey);
+            if (graveType == null) {
+                logger.atSevere().log("[Gravestones] Unknown gravestone block key " + graveKey);
+                return;
+            }
+            int graveBlockId = assetMap.getIndex(graveKey);
+            chunk.setBlock(x, y, z, graveBlockId, graveType, 0, FillerBlockUtil.NO_FILLER, SetBlockSettings.NONE);
+
             executor.schedule(() -> world.execute(() -> fillContainer(world, x, y, z, items, 0)), 100L, TimeUnit.MILLISECONDS);
         } catch (Exception e) {
             logger.atSevere().log("[Gravestones] Block placement error: " + e.getMessage());
         }
     }
 
-    @SuppressWarnings("removal")
     private void fillContainer(World world, int x, int y, int z, List<ItemStack> items, int attempt) {
         try {
-            BlockState state = BlockStateUtil.getBlockState(world, x, y, z);
+            // The BlockState/ItemContainerState hierarchy was removed in Update 5. Container
+            // storage now lives in the built-in ItemContainerBlock ECS component, attached to
+            // the block entity via the "container" State entry in the block's asset JSON.
+            ItemContainerBlock containerBlock = BlockStateUtil.getItemContainerBlock(world, x, y, z);
 
-            if (state == null) {
+            if (containerBlock == null) {
                 if (attempt < MAX_RETRIES) {
-                    logger.atInfo().log("[Gravestones] State null at (" + x + ", " + y + ", " + z + "), retry " + (attempt + 1) + "/" + MAX_RETRIES);
+                    logger.atInfo().log("[Gravestones] Container block null at (" + x + ", " + y + ", " + z + "), retry " + (attempt + 1) + "/" + MAX_RETRIES);
                     executor.schedule(() -> world.execute(() -> fillContainer(world, x, y, z, items, attempt + 1)), RETRY_DELAY, TimeUnit.MILLISECONDS);
                 } else {
-                    logger.atWarning().log("[Gravestones] Failed to get block state after " + MAX_RETRIES + " retries at (" + x + ", " + y + ", " + z + ")");
+                    logger.atWarning().log("[Gravestones] Failed to get item container block after " + MAX_RETRIES + " retries at (" + x + ", " + y + ", " + z + ")");
                 }
                 return;
             }
 
-            if (state instanceof ItemContainerState) {
-                ItemContainerState container = (ItemContainerState) state;
-                SimpleItemContainer inv = new SimpleItemContainer((short) Math.max(items.size(), 1));
-                container.setItemContainer(inv);
-                inv.addItemStacks(items);
-                logger.atInfo().log("[Gravestones] Filled container with " + items.size() + " items at (" + x + ", " + y + ", " + z + ")");
-            } else {
-                logger.atWarning().log("[Gravestones] Block state not ItemContainerState at (" + x + ", " + y + ", " + z + ") - type: " + state.getClass().getSimpleName());
-            }
+            SimpleItemContainer inv = new SimpleItemContainer((short) Math.max(items.size(), 1));
+            containerBlock.setItemContainer(inv);
+            inv.addItemStacks(items);
+            logger.atInfo().log("[Gravestones] Filled container with " + items.size() + " items at (" + x + ", " + y + ", " + z + ")");
         } catch (Exception e) {
             logger.atWarning().log("[Gravestones] Container fill error: " + e.getMessage());
         }

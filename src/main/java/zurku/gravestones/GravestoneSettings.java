@@ -12,7 +12,6 @@ import java.io.IOException;
 
 public class GravestoneSettings {
 
-    private static final String SETTINGS_PATH = "plugins/Gravestones/settings.json";
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final int CURRENT_VERSION = 2;
     @SuppressWarnings("unused")
@@ -21,11 +20,13 @@ public class GravestoneSettings {
     private int despawnMinutes = 0;
     private int maxPerPlayer = 0;
     private boolean ownerProtection = false;
-    
-    private transient HytaleLogger logger;
 
-    public GravestoneSettings(HytaleLogger logger) {
+    private transient HytaleLogger logger;
+    private transient File configFile;
+
+    public GravestoneSettings(HytaleLogger logger, File dataFolder) {
         this.logger = logger;
+        this.configFile = new File(dataFolder, "config.json");
     }
 
     public boolean isUseVanillaModel() {
@@ -69,7 +70,7 @@ public class GravestoneSettings {
     }
 
     public void load() {
-        File file = new File(SETTINGS_PATH);
+        File file = configFile;
         if (file.exists()) {
             try (FileReader reader = new FileReader(file)) {
                 JsonObject json = JsonParser.parseReader(reader).getAsJsonObject();
@@ -129,7 +130,7 @@ public class GravestoneSettings {
     }
 
     public void save() {
-        File file = new File(SETTINGS_PATH);
+        File file = configFile;
         file.getParentFile().mkdirs();
 
         try (FileWriter writer = new FileWriter(file)) {
