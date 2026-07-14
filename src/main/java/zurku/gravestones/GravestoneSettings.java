@@ -20,6 +20,7 @@ public class GravestoneSettings {
     private int despawnMinutes = 0;
     private int maxPerPlayer = 0;
     private boolean ownerProtection = false;
+    private boolean instantCollect = false;
 
     private transient HytaleLogger logger;
     private transient File configFile;
@@ -69,6 +70,15 @@ public class GravestoneSettings {
         save();
     }
 
+    public boolean isInstantCollect() {
+        return instantCollect;
+    }
+
+    public void toggleInstantCollect() {
+        instantCollect = !instantCollect;
+        save();
+    }
+
     public void load() {
         File file = configFile;
         if (file.exists()) {
@@ -91,6 +101,9 @@ public class GravestoneSettings {
                 }
                 if (json.has("ownerProtection")) {
                     this.ownerProtection = json.get("ownerProtection").getAsBoolean();
+                }
+                if (json.has("instantCollect")) {
+                    this.instantCollect = json.get("instantCollect").getAsBoolean();
                 }
                 
                 if (logger != null) {
@@ -127,6 +140,7 @@ public class GravestoneSettings {
         this.despawnMinutes = 0;
         this.maxPerPlayer = 0;
         this.ownerProtection = false;
+        this.instantCollect = false;
     }
 
     public void save() {

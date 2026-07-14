@@ -10,6 +10,7 @@ import com.hypixel.hytale.server.core.modules.entity.damage.DeathSystems;
 import com.hypixel.hytale.server.core.modules.interaction.interaction.config.Interaction;
 import com.hypixel.hytale.server.core.plugin.JavaPlugin;
 import com.hypixel.hytale.server.core.plugin.JavaPluginInit;
+import zurku.gravestones.commands.GsItemsCommand;
 import zurku.gravestones.commands.GsLimitCommand;
 import zurku.gravestones.commands.GsModelCommand;
 import zurku.gravestones.commands.GsProtectionCommand;
@@ -280,6 +281,7 @@ public class GravestonePlugin extends JavaPlugin {
             getCommandRegistry().registerCommand(new GsTimerCommand(settings));
             getCommandRegistry().registerCommand(new GsProtectionCommand(settings));
             getCommandRegistry().registerCommand(new GsLimitCommand(settings));
+            getCommandRegistry().registerCommand(new GsItemsCommand(settings));
         } catch (Exception e) {
             getLogger().atWarning().log("[Gravestones] Command registration failed: " + e.getMessage());
         }
