@@ -4,7 +4,6 @@ import com.hypixel.hytale.assetstore.AssetRegistry;
 import com.hypixel.hytale.component.ComponentRegistry;
 import com.hypixel.hytale.component.ComponentRegistryProxy;
 import com.hypixel.hytale.component.system.ISystem;
-import com.hypixel.hytale.server.core.event.events.ecs.BreakBlockEvent;
 import com.hypixel.hytale.server.core.event.events.player.AddPlayerToWorldEvent;
 import com.hypixel.hytale.server.core.modules.entity.damage.DeathSystems;
 import com.hypixel.hytale.server.core.modules.interaction.interaction.config.Interaction;
@@ -15,13 +14,9 @@ import zurku.gravestones.commands.GsLimitCommand;
 import zurku.gravestones.commands.GsModelCommand;
 import zurku.gravestones.commands.GsProtectionCommand;
 import zurku.gravestones.commands.GsTimerCommand;
-import zurku.gravestones.event.GravestoneBrokenEvent;
-import com.hypixel.hytale.server.core.HytaleServer;
-import com.hypixel.hytale.event.IEventDispatcher;
 import java.io.File;
 import java.lang.reflect.Field;
 import java.util.List;
-import java.util.UUID;
 import javax.annotation.Nonnull;
 
 @SuppressWarnings({"unchecked", "rawtypes"})
@@ -76,7 +71,7 @@ public class GravestonePlugin extends JavaPlugin {
         registerInteraction();
         registerDeathListener();
         disableVanillaItemDrop();
-        registerBreakListener();
+        registerBlockSystems();
         registerPlayerJoinListener();
         registerCommands();
         
@@ -235,30 +230,18 @@ public class GravestonePlugin extends JavaPlugin {
         }
     }
 
-    private void registerBreakListener() {
+    /**
+     * 0.6.x: UseBlockEvent / BreakBlockEvent are ECS events. They are NOT delivered through
+     * getEventRegistry().registerGlobal(...); a plugin must register an EntityEventSystem on
+     * the entity store (same mechanism as the DeathListenerSystem).
+     */
+    private void registerBlockSystems() {
         try {
-            getEventRegistry().registerGlobal(BreakBlockEvent.class, event -> {
-                String id = event.getBlockType().getId();
-                if (id != null && id.contains("Gravestone")) {
-                    int bx = event.getTargetBlock().x;
-                    int by = event.getTargetBlock().y;
-                    int bz = event.getTargetBlock().z;
-
-                    // Fire broken event before removing data
-                    try {
-                        UUID ownerUuid = gravestoneManager.getGravestoneOwner(bx, by, bz);
-                        // BreakBlockEvent doesn't provide breaker or world context
-                        IEventDispatcher<GravestoneBrokenEvent, GravestoneBrokenEvent> dispatcher =
-                            HytaleServer.get().getEventBus().dispatchFor(GravestoneBrokenEvent.class);
-                        if (dispatcher.hasListener()) {
-                            dispatcher.dispatch(new GravestoneBrokenEvent(null, ownerUuid, bx, by, bz, ""));
-                        }
-                    } catch (Exception ignored2) {}
-
-                    gravestoneManager.removeGravestoneAtPosition(bx, by, bz);
-                }
-            });
-        } catch (Exception ignored) {
+            getEntityStoreRegistry().registerSystem((ISystem) new GravestoneUseSystem(gravestoneManager, getLogger()));
+            getEntityStoreRegistry().registerSystem((ISystem) new GravestoneBreakSystem(gravestoneManager, getLogger()));
+            getLogger().atInfo().log("[Gravestones] Block use/break systems registered");
+        } catch (Exception e) {
+            getLogger().atSevere().log("[Gravestones] Block system registration failed: " + e.getMessage());
         }
     }
 

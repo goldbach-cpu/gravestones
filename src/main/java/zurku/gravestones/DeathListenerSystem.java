@@ -23,6 +23,10 @@ import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import java.util.List;
 import javax.annotation.Nonnull;
 
+/**
+ * HYTALE 0.6.1 PORT: Death listener system.
+ * Listens for player deaths and creates gravestones with dropped items.
+ */
 @SuppressWarnings("unchecked")
 public class DeathListenerSystem extends DeathSystems.OnDeathSystem {
 
@@ -32,6 +36,7 @@ public class DeathListenerSystem extends DeathSystems.OnDeathSystem {
     public DeathListenerSystem(GravestonePlugin plugin) {
         this.plugin = plugin;
         this.logger = plugin.getLogger();
+        this.logger.atInfo().log("[Gravestones] DeathListenerSystem registered");
     }
 
     @Override
@@ -43,25 +48,31 @@ public class DeathListenerSystem extends DeathSystems.OnDeathSystem {
     public void onComponentAdded(@Nonnull Ref<EntityStore> ref, @Nonnull DeathComponent death,
             @Nonnull Store<EntityStore> store, @Nonnull CommandBuffer<EntityStore> buffer) {
         try {
+            this.logger.atInfo().log("[Gravestones] Death event triggered");
+            
             Player player = store.getComponent(ref, Player.getComponentType());
-            if (player == null) return;
+            if (player == null) {
+                return;
+            }
 
-            if (player.getGameMode() == com.hypixel.hytale.protocol.GameMode.Creative) return;
+            if (player.getGameMode() == com.hypixel.hytale.protocol.GameMode.Creative) {
+                return;
+            }
 
             death.setDisplayDataOnDeathScreen(true);
 
             World world = player.getWorld();
-            if (world == null) return;
+            if (world == null) {
+                return;
+            }
 
             DeathConfig config = world.getDeathConfig();
-
             DeathConfig.ItemsLossMode mode = config.getItemsLossMode();
-            if (mode == DeathConfig.ItemsLossMode.NONE) return;
+            
+            if (mode == DeathConfig.ItemsLossMode.NONE) {
+                return;
+            }
 
-            // Inventory.getCombinedEverything() no longer exists (Update 5). The closest
-            // equivalent is asking InventoryComponent for a combined view across every slot
-            // component type (Storage/Armor/Hotbar/Utility/Backpack/Tool) that exists on the
-            // player entity - this replicates "everything the player is carrying".
             CombinedItemContainer combined = InventoryComponent.getCombined(store, ref,
                 InventoryComponent.Storage.getComponentType(),
                 InventoryComponent.Armor.getComponentType(),
@@ -90,8 +101,6 @@ public class DeathListenerSystem extends DeathSystems.OnDeathSystem {
                 }
 
                 if (armorBroken) {
-                    // player.getStatModifiersManager() no longer exists (Update 5); stat
-                    // modifiers now live behind the EntityStatMap component.
                     EntityStatMap statMap = store.getComponent(ref, EntityStatMap.getComponentType());
                     if (statMap != null) {
                         statMap.getStatModifiersManager().scheduleRecalculate();
@@ -135,12 +144,13 @@ public class DeathListenerSystem extends DeathSystems.OnDeathSystem {
             }
 
             if (items != null && !items.isEmpty()) {
+                this.logger.atInfo().log("[Gravestones] Creating gravestone with " + items.size() + " items");
                 plugin.getGravestoneManager().onPlayerDeath(player, store, ref, items.toArray(new ItemStack[0]));
                 death.setItemsLostOnDeath(items);
             }
 
         } catch (Exception e) {
-            logger.atSevere().log("[Gravestones] Death processing error: " + e.getMessage());
+            this.logger.atSevere().log("[Gravestones] Death processing error: " + e.getMessage());
         }
     }
 }

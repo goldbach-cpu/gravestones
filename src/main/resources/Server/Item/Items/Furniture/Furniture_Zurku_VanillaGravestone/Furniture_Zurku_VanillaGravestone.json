@@ -13,25 +13,7 @@
       }
     },
     "Interactions": {
-      "Primary": "Break_Gravestone",
       "Use": "Collect_Gravestone"
-    },
-    "State": {
-      "Definitions": {
-        "OpenWindow": {
-          "InteractionSoundEventId": "SFX_Chest_Wooden_Open"
-        },
-        "CloseWindow": {
-          "InteractionSoundEventId": "SFX_Chest_Wooden_Close"
-        }
-      }
-    },
-    "BlockEntity": {
-      "Components": {
-        "ItemContainerBlock": {
-          "Capacity": 72
-        }
-      }
     }
   }
 }
