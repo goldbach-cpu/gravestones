@@ -28,9 +28,7 @@ import com.hypixel.hytale.server.core.inventory.transaction.ItemStackTransaction
 import com.hypixel.hytale.server.core.modules.entity.component.HeadRotation;
 import com.hypixel.hytale.server.core.modules.entity.item.ItemComponent;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
-import com.hypixel.hytale.math.util.ChunkUtil;
 import com.hypixel.hytale.server.core.universe.world.World;
-import com.hypixel.hytale.server.core.universe.world.chunk.WorldChunk;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 import org.joml.Vector3d;
 import org.joml.Vector3i;
@@ -207,8 +205,7 @@ public class GravestoneUseSystem extends EntityEventSystem<EntityStore, UseBlock
         // Use the block that is actually in the world (the window validates against it).
         BlockType blockType = null;
         try {
-            WorldChunk chunk = world.getChunkIfLoaded(ChunkUtil.indexChunkFromBlock(pos.x, pos.z));
-            if (chunk != null) blockType = chunk.getBlockType(pos.x, pos.y, pos.z);
+            blockType = BlockStateUtil.getBlockType(world, pos.x, pos.y, pos.z);
         } catch (Exception ignored) {}
         if (blockType == null || blockType.getItem() == null) {
             blockType = BlockType.getAssetMap().getAsset(manager.getSettings().getGravestoneBlockId());

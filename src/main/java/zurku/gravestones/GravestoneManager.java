@@ -6,18 +6,14 @@ import com.google.gson.reflect.TypeToken;
 import com.hypixel.hytale.component.Ref;
 import com.hypixel.hytale.component.Store;
 import com.hypixel.hytale.logger.HytaleLogger;
-import com.hypixel.hytale.math.util.ChunkUtil;
 import com.hypixel.hytale.server.core.asset.type.blocktype.config.BlockType;
 import com.hypixel.hytale.server.core.entity.UUIDComponent;
 import com.hypixel.hytale.server.core.entity.entities.Player;
 import com.hypixel.hytale.server.core.inventory.ItemStack;
 import com.hypixel.hytale.server.core.modules.entity.component.TransformComponent;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
-import com.hypixel.hytale.server.core.universe.world.SetBlockSettings;
 import com.hypixel.hytale.server.core.universe.world.World;
-import com.hypixel.hytale.server.core.universe.world.chunk.WorldChunk;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
-import com.hypixel.hytale.server.core.util.FillerBlockUtil;
 import org.joml.Vector3d;
 import com.hypixel.hytale.server.core.permissions.PermissionsModule;
 import com.hypixel.hytale.server.core.HytaleServer;
@@ -110,17 +106,8 @@ public class GravestoneManager {
      */
     private void breakBlockAt(World world, int x, int y, int z) {
         // Replace with air instead of a vanilla "break" so the tombstone never drops as an item.
-        long chunkKey = ChunkUtil.indexChunkFromBlock(x, z);
-        WorldChunk chunk = world.getChunkIfLoaded(chunkKey);
-        if (chunk != null) {
-            world.execute(() -> chunk.setBlock(x, y, z, BlockType.EMPTY_ID, BlockType.EMPTY, 0, FillerBlockUtil.NO_FILLER, SetBlockSettings.NONE));
-        } else {
-            world.getChunkAsync(chunkKey).thenAccept(c -> {
-                if (c != null) {
-                    world.execute(() -> c.setBlock(x, y, z, BlockType.EMPTY_ID, BlockType.EMPTY, 0, FillerBlockUtil.NO_FILLER, SetBlockSettings.NONE));
-                }
-            });
-        }
+        // 0.7.0: block writes go through BlockOperations (see BlockStateUtil).
+        BlockStateUtil.clearBlock(world, x, y, z);
     }
 
     private void processPendingRemovals(World world) {
@@ -446,33 +433,30 @@ public class GravestoneManager {
 
     private void placeGravestone(World world, int x, int y, int z, List<ItemStack> items) {
         try {
-            long chunkKey = ChunkUtil.indexChunkFromBlock(x, z);
-            WorldChunk chunk = world.getChunkIfLoaded(chunkKey);
-
-            if (chunk == null) {
-                world.getChunkAsync(chunkKey).thenAccept(c -> {
-                    if (c != null) {
-                        world.execute(() -> doPlacement(world, c, x, y, z, items));
+            // Runs on the world thread (scheduled via world.execute). Load the section async if needed.
+            var chunkStore = world.getChunkStore();
+            if (chunkStore.getChunkSectionReferenceAtBlock(x, y, z) != null) {
+                doPlacement(world, x, y, z, items);
+            } else {
+                chunkStore.getChunkSectionReferenceAtBlockAsync(x, y, z).thenAccept(ref -> {
+                    if (ref != null) {
+                        world.execute(() -> doPlacement(world, x, y, z, items));
                     }
                 });
-            } else {
-                doPlacement(world, chunk, x, y, z, items);
             }
         } catch (Exception e) {
             logger.atSevere().log("[Gravestones] Placement error: " + e.getMessage());
         }
     }
 
-    private void doPlacement(World world, WorldChunk chunk, int x, int y, int z, List<ItemStack> items) {
+    private void doPlacement(World world, int x, int y, int z, List<ItemStack> items) {
         try {
-            // World.setBlock() / WorldChunk.setBlock(x,y,z,id) no longer exist (Update 5).
-            // WorldChunk.setBlock now always takes the resolved BlockType + numeric palette id + rotation/filler/settings.
-            chunk.setBlock(x, y, z, BlockType.EMPTY_ID, BlockType.EMPTY, 0, FillerBlockUtil.NO_FILLER, SetBlockSettings.NONE);
+            // 0.7.0: blocks are written via BlockOperations.setBlock(ChunkStore, sectionRef, ...).
+            BlockStateUtil.setBlockNow(world, x, y, z, BlockType.EMPTY_ID, BlockType.EMPTY);
 
             // GravestoneSettings.getGravestoneBlockId() returns the block's String asset key
-            // (e.g. "Zurku_Gravestones:Furniture_Zurku_Gravestone"), not a numeric id - BlockType
-            // itself is keyed by String now. The numeric id needed by WorldChunk.setBlock (the
-            // runtime palette index) comes from a separate lookup on the same asset map.
+            // (e.g. "Zurku_Gravestones:Furniture_Zurku_Gravestone"). The numeric palette id
+            // comes from the same asset map.
             String graveKey = settings.getGravestoneBlockId();
             var assetMap = BlockType.getAssetMap();
             BlockType graveType = assetMap.getAsset(graveKey);
@@ -481,7 +465,7 @@ public class GravestoneManager {
                 return;
             }
             int graveBlockId = assetMap.getIndex(graveKey);
-            chunk.setBlock(x, y, z, graveBlockId, graveType, 0, FillerBlockUtil.NO_FILLER, SetBlockSettings.NONE);
+            BlockStateUtil.setBlockNow(world, x, y, z, graveBlockId, graveType);
 
         } catch (Exception e) {
             logger.atSevere().log("[Gravestones] Block placement error: " + e.getMessage());
@@ -535,10 +519,7 @@ public class GravestoneManager {
      */
     public void clearBlock(World world, int x, int y, int z) {
         try {
-            WorldChunk chunk = world.getChunkIfLoaded(ChunkUtil.indexChunkFromBlock(x, z));
-            if (chunk != null) {
-                chunk.setBlock(x, y, z, BlockType.EMPTY_ID, BlockType.EMPTY, 0, FillerBlockUtil.NO_FILLER, SetBlockSettings.NONE);
-            } else {
+            if (!BlockStateUtil.setBlockNow(world, x, y, z, BlockType.EMPTY_ID, BlockType.EMPTY)) {
                 breakBlockAt(world, x, y, z);
             }
         } catch (Exception e) {
